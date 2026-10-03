@@ -1,0 +1,1005 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>DeepSeek娘大战GPT娘</title>
+<style>
+    body { margin: 0; background: #0a1a2a; display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100vh; overflow: hidden; font-family: sans-serif; color: #fff; gap: 15px; }
+    
+    #top-ui {
+        width: 600px;
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+    }
+    .ui-box {
+        background: #0f2338;
+        border: 2px solid #4a9eff;
+        border-radius: 10px;
+        padding: 10px 15px;
+        box-sizing: border-box;
+        font-size: 14px;
+        line-height: 1.6;
+        flex: 1;
+    }
+    .ui-box.left { border-color: #4a9eff; text-align: left; }
+    .ui-box.right { border-color: #cc44ff; text-align: right; }
+    .ui-box.center { flex: 0.8; text-align: center; border-color: #888; }
+    
+    .ui-title { font-size: 16px; font-weight: bold; margin-bottom: 5px; }
+    .left .ui-title { color: #4a9eff; }
+    .right .ui-title { color: #cc44ff; }
+    .center .ui-title { color: #aaa; }
+    
+    .highlight { color: #ffcc00; font-weight: bold; }
+    .warn { color: #ff4444; font-weight: bold; }
+    .good { color: #4aff4a; font-weight: bold; }
+    .special { color: #cc44ff; font-weight: bold; }
+    .heal { color: #4aff4a; font-weight: bold; }
+    
+    .controls { display: flex; gap: 15px; margin-bottom: 5px; }
+    .controls label { cursor: pointer; background: #1a3a5a; padding: 6px 12px; border-radius: 6px; border: 1px solid #4a9eff; font-size: 12px; transition: 0.2s; }
+    .controls label:hover { background: #2a5a8a; }
+    .controls input[type="file"] { display: none; }
+    
+    canvas { border: 4px solid #4a9eff; box-shadow: 0 0 40px #4a9eff55; border-radius: 12px; }
+</style>
+</head>
+<body>
+
+<div id="top-ui">
+    <div class="ui-box left">
+        <div class="ui-title">DeepSeek娘</div>
+        <div>HP: <span id="ui-fish-hp" class="good">888/888</span></div>
+        <div>Token: <span id="ui-fish-token" class="highlight">0/100</span></div>
+        <div>状态: <span id="ui-fish-state" class="highlight">普通</span></div>
+        <div id="ui-fish-debuff" style="display:none;">侵蚀: <span class="special" id="ui-fish-debuff-val">0层</span></div>
+    </div>
+
+    <div class="ui-box center">
+        <div class="ui-title">特殊谜题</div>
+        <div>场上: <span id="ui-special-count" class="special">0/10</span></div>
+        <div>答错: <span id="ui-fail-count" class="warn">0/6</span></div>
+    </div>
+
+    <div class="ui-box right">
+        <div class="ui-title">GPT娘</div>
+        <div>HP: <span id="ui-dragon-hp" class="special">666/666</span></div>
+        <div>Token: <span id="ui-dragon-token" class="special">0/66</span></div>
+        <div>状态: <span id="ui-dragon-state" class="special">普通</span></div>
+        <div>共鸣: <span id="ui-dragon-heal" class="heal">就绪</span></div>
+    </div>
+</div>
+
+<div class="controls">
+    <label>📁 上传DeepSeek娘图片 <input type="file" id="fishUpload" accept="image/*"></label>
+    <label>📁 上传GPT娘图片 <input type="file" id="dragonUpload" accept="image/*"></label>
+</div>
+
+<canvas id="game" width="600" height="600"></canvas>
+
+<script>
+// ==================== 游戏配置 ====================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const W = 600, H = 600;
+
+const FISH_BASE_R = 60;
+const DRAGON_BASE_R = 70;
+
+const FISH_INIT_SPEED = 120;
+const DRAGON_INIT_SPEED = 100;
+const DASH_SPEED = 450;
+
+const ACCEL = 300;
+const DECEL = 200;
+
+const CHARGE_TIME = 1.5;
+const DASH_TIME = 4.0;      // ★ 冲刺改为4秒
+const OVERLOAD_TIME = 3.0;  
+const OVERLOAD_SPEED = 40;  
+
+const DAMAGE_BASE_SPEED = 120;
+const DAMAGE_BASE_VALUE = 88;
+
+const FISH_MAX_HP = 888;
+const DRAGON_MAX_HP = 666;
+const MAX_TOKEN = 100;
+const RICE_TOKEN_VALUE = 15;
+const MATH_DAMAGE = 66;
+const DAMAGE_COOLDOWN = 0.5;
+
+const ANSWER_COST = 10;        
+const GPT_ANSWER_CD = 6.0;
+const GPT_TOKEN_MAX = 66;
+const GPT_ANSWER_HEAL = 66;
+const DASH_HEAL = 88;
+
+const SPECIAL_PROBLEM_MAX = 10;      
+const SPECIAL_ANSWER_CHANCE = 0.10;  
+const SPECIAL_FAIL_DIFFUSE = 6;      
+const SPECIAL_DEBUFF_TIME = 3.0;     
+const SPECIAL_BASE_DMG = 6;          
+const SPECIAL_LAYER_DMG = 2;         
+const SPECIAL_COOLDOWN = 0.5;        
+const SPECIAL_LIFETIME = 15.0;       
+const SPECIAL_TOKEN_LOSS = 1;         // ★ 特殊题debuff减少1 token
+
+const SPECIAL_HEAL_PER_PROBLEM = 6;  
+const SPECIAL_HEAL_CD = 6.0;         
+
+const RICE_SPAWN_TIME = 1.5;
+const MATH_SPAWN_TIME = 3.0;
+const MAX_RICE = 5;
+const MAX_MATH = 20;
+
+// ==================== 游戏状态 ====================
+let gameOver = false;
+let floatTexts = [];
+let riceSpawnTimer = 0;
+let mathSpawnTimer = 0;
+let rices = [];
+let mathProblems = [];      
+let specialProblems = [];   
+let flyawayItems = []; 
+let specialFailCount = 0;   
+
+// ==================== 角色定义 ====================
+const fish = {
+    x: 150, y: 300, r: FISH_BASE_R,
+    vx: 0, vy: 0, angle: 0,
+    hp: FISH_MAX_HP, maxHp: FISH_MAX_HP,
+    token: 0, maxToken: MAX_TOKEN,
+    state: 'normal', 
+    stateTimer: 0,
+    name: 'DeepSeek娘',
+    targetX: 0, targetY: 0,
+    hitCooldown: 0,
+    dashHitCount: 0,
+    specialDebuffLayers: 0,
+    specialDebuffTimer: 0,
+    specialCooldown: 0
+};
+
+const dragon = {
+    x: 450, y: 300, r: DRAGON_BASE_R,
+    vx: 0, vy: 0, angle: 0,
+    hp: DRAGON_MAX_HP, maxHp: DRAGON_MAX_HP,
+    token: 0, maxToken: GPT_TOKEN_MAX,
+    tokenTimer: 0,
+    answerCooldown: 0,
+    name: 'GPT娘',
+    lastX: 450, lastY: 300,
+    state: 'normal', 
+    stateTimer: 0,
+    flightT: 0,
+    invincible: false,
+    ultReady: false, 
+    startX: 0, startY: 0,
+    endX: 0, endY: 0,
+    specialHealCD: 0
+};
+
+// ==================== 图片加载 ====================
+const fishImg = new Image();
+const dragonImg = new Image();
+
+document.getElementById('fishUpload').addEventListener('change', function(e) {
+    const file = e.target.files[0];
+    if (file) fishImg.src = URL.createObjectURL(file);
+});
+document.getElementById('dragonUpload').addEventListener('change', function(e) {
+    const file = e.target.files[0];
+    if (file) dragonImg.src = URL.createObjectURL(file);
+});
+
+// ==================== 工具函数 ====================
+function initAngle(entity, speed) {
+    entity.angle = Math.random() * Math.PI * 2;
+    entity.vx = Math.cos(entity.angle) * speed;
+    entity.vy = Math.sin(entity.angle) * speed;
+}
+
+function addFloatText(x, y, text, color) {
+    floatTexts.push({ x, y, text, color, life: 1.0 });
+}
+
+function spawnMathProblem(x, y) {
+    x = Math.max(40, Math.min(W - 40, x));
+    y = Math.max(40, Math.min(H - 40, y));
+    mathProblems.push({ x, y, r: 24 });
+}
+
+function spawnSpecialProblem(x, y) {
+    if (specialProblems.length >= SPECIAL_PROBLEM_MAX) return;
+    x = Math.max(40, Math.min(W - 40, x));
+    y = Math.max(40, Math.min(H - 40, y));
+    specialProblems.push({ x, y, r: 30, life: SPECIAL_LIFETIME });
+}
+
+function calculateEndPoint(startX, startY) {
+    const cx = W / 2, cy = H / 2;
+    const dx = cx - startX;
+    const dy = cy - startY;
+    if (dx === 0 && dy === 0) return { x: cx, y: cy };
+    
+    let tX = Infinity, tY = Infinity;
+    if (dx > 0) tX = (W - startX) / dx;
+    else if (dx < 0) tX = (0 - startX) / dx;
+    
+    if (dy > 0) tY = (H - startY) / dy;
+    else if (dy < 0) tY = (0 - startY) / dy;
+    
+    let t = Math.min(tX, tY);
+    if (!isFinite(t) || t <= 0) t = 1;
+    
+    return {
+        x: startX + t * dx,
+        y: startY + t * dy
+    };
+}
+
+function triggerDragonUlt(x, y) {
+    dragon.state = 'flying';
+    dragon.invincible = true;
+    dragon.flightT = 0;
+    dragon.stateTimer = 2.0;
+    dragon.r = DRAGON_BASE_R * 0.4;
+    dragon.ultReady = false;
+    dragon.token = 0;
+    
+    dragon.startX = x;
+    dragon.startY = y;
+    const end = calculateEndPoint(x, y);
+    dragon.endX = end.x;
+    dragon.endY = end.y;
+    
+    for (let k = 0; k < 6; k++) {
+        if (specialProblems.length >= SPECIAL_PROBLEM_MAX) break;
+        const t = 0.15 + (k / 5) * 0.7;
+        const px = dragon.startX + t * (dragon.endX - dragon.startX);
+        const py = dragon.startY + t * (dragon.endY - dragon.startY);
+        spawnSpecialProblem(px, py);
+    }
+    
+    addFloatText(dragon.x, dragon.y - dragon.r, '末影龙形态！', '#8000ff');
+}
+
+// ==================== 物理碰撞 ====================
+function resolveCollision(a, b) {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    let dist = Math.sqrt(dx * dx + dy * dy);
+    const minDist = a.r + b.r;
+
+    if (dist < minDist) {
+        if (dist === 0) dist = 0.01;
+        const nx = dx / dist;
+        const ny = dy / dist;
+
+        if (a.invincible || b.invincible) {
+            const target = a.invincible ? b : a;
+            const source = a.invincible ? a : b;
+            
+            const overlap = source.r + target.r - dist;
+            if (overlap > 0) {
+                target.x += nx * overlap;
+                target.y += ny * overlap;
+            }
+            target.vx = nx * 600;
+            target.vy = ny * 600;
+            return; 
+        }
+
+        const ma = a.r * a.r;
+        const mb = b.r * b.r;
+        const totalMass = ma + mb;
+
+        const overlap = minDist - dist;
+        a.x -= nx * overlap * (mb / totalMass);
+        a.y -= ny * overlap * (mb / totalMass);
+        b.x += nx * overlap * (ma / totalMass);
+        b.y += ny * overlap * (ma / totalMass);
+
+        const rvx = b.vx - a.vx;
+        const rvy = b.vy - a.vy;
+        const velAlongNormal = rvx * nx + rvy * ny;
+
+        if (velAlongNormal < 0) {
+            const restitution = 0.9;
+            const impulse = -(1 + restitution) * velAlongNormal / (1/ma + 1/mb);
+            a.vx -= (impulse * nx) / ma;
+            a.vy -= (impulse * ny) / ma;
+            b.vx += (impulse * nx) / mb;
+            b.vy += (impulse * ny) / mb;
+        }
+
+        if (a === fish && fish.state === 'dash' && b === dragon) {
+            const nx2 = -dx / dist;
+            const ny2 = -dy / dist;
+            a.vx = nx2 * DASH_SPEED;
+            a.vy = ny2 * DASH_SPEED;
+            a.angle = Math.atan2(a.vy, a.vx);
+            b.vx = -nx2 * 400;
+            b.vy = -ny2 * 400;
+            applyDashDamage(dragon, fish);
+        } else if (b === fish && fish.state === 'dash' && a === dragon) {
+            const nx2 = dx / dist;
+            const ny2 = dy / dist;
+            b.vx = nx2 * DASH_SPEED;
+            b.vy = ny2 * DASH_SPEED;
+            b.angle = Math.atan2(b.vy, b.vx);
+            a.vx = -nx2 * 400;
+            a.vy = -ny2 * 400;
+            applyDashDamage(dragon, fish);
+        }
+        
+        if (Math.hypot(a.vx, a.vy) > 10) a.angle = Math.atan2(a.vy, a.vx);
+        if (Math.hypot(b.vx, b.vy) > 10) b.angle = Math.atan2(b.vy, b.vx);
+    }
+}
+
+function applyDashDamage(target, attacker) {
+    if (attacker.hitCooldown > 0) return;
+    if (target.invincible) return; 
+    
+    const speed = Math.hypot(attacker.vx, attacker.vy);
+    let baseDamage = 0;
+    const speedRatio = speed / DAMAGE_BASE_SPEED;
+    
+    if (speed > DAMAGE_BASE_SPEED) {
+        baseDamage = Math.round(DAMAGE_BASE_VALUE * speedRatio);
+    } else {
+        baseDamage = Math.round(DAMAGE_BASE_VALUE * speedRatio * 0.5);
+    }
+
+    let damage = Math.round(baseDamage * Math.pow(0.6, attacker.dashHitCount));
+    damage = Math.max(10, damage);
+    attacker.dashHitCount++;
+
+    target.hp = Math.max(0, target.hp - damage);
+    addFloatText(target.x, target.y - target.r, `-${damage} (第${attacker.dashHitCount}击)`, '#ff4444');
+    
+    if (target.hp <= 0) gameOver = true;
+
+    attacker.hitCooldown = DAMAGE_COOLDOWN;
+}
+
+function wallCollision(entity) {
+    if (entity === dragon && dragon.state === 'flying') return;
+    
+    let hit = false;
+    let hitX = entity.x, hitY = entity.y;
+
+    if (entity.x - entity.r < 0) { 
+        entity.x = entity.r; 
+        entity.vx = Math.abs(entity.vx); 
+        hit = true; hitX = 0; hitY = entity.y;
+    }
+    if (entity.x + entity.r > W) { 
+        entity.x = W - entity.r; 
+        entity.vx = -Math.abs(entity.vx); 
+        hit = true; hitX = W; hitY = entity.y;
+    }
+    if (entity.y - entity.r < 0) { 
+        entity.y = entity.r; 
+        entity.vy = Math.abs(entity.vy); 
+        hit = true; hitX = entity.x; hitY = 0;
+    }
+    if (entity.y + entity.r > H) { 
+        entity.y = H - entity.r; 
+        entity.vy = -Math.abs(entity.vy); 
+        hit = true; hitX = entity.x; hitY = H;
+    }
+
+    if (entity === dragon && dragon.ultReady && hit) {
+        triggerDragonUlt(hitX, hitY);
+    }
+}
+
+// ==================== 初始化 ====================
+initAngle(fish, FISH_INIT_SPEED);
+initAngle(dragon, DRAGON_INIT_SPEED);
+
+// ==================== 更新逻辑 ====================
+function update(dt) {
+    if (gameOver) return;
+
+    if (fish.hitCooldown > 0) fish.hitCooldown -= dt;
+    if (fish.specialCooldown > 0) fish.specialCooldown -= dt;
+    if (dragon.specialHealCD > 0) dragon.specialHealCD -= dt;
+
+    // ★ GPT答题冷却：仅当处于冷却中才递减（不会自动启动）
+    if (dragon.answerCooldown > 0) {
+        dragon.answerCooldown -= dt;
+        if (dragon.answerCooldown < 0) dragon.answerCooldown = 0;
+    }
+
+    if (fish.specialDebuffTimer > 0) {
+        fish.specialDebuffTimer -= dt;
+        if (fish.specialDebuffTimer <= 0) {
+            fish.specialDebuffLayers = 0;
+            addFloatText(fish.x, fish.y - fish.r, '侵蚀消退', '#cc44ff');
+        }
+    }
+
+    dragon.lastX = dragon.x;
+    dragon.lastY = dragon.y;
+
+    // ========== GPT娘 谜题共鸣回血 ==========
+    if (dragon.specialHealCD <= 0 && specialProblems.length > 0) {
+        const healAmount = specialProblems.length * SPECIAL_HEAL_PER_PROBLEM;
+        dragon.hp = Math.min(dragon.maxHp, dragon.hp + healAmount);
+        addFloatText(dragon.x, dragon.y - dragon.r, `谜题共鸣! +${healAmount} HP`, '#4aff4a');
+        dragon.specialHealCD = SPECIAL_HEAL_CD;
+    }
+
+    // ========== GPT娘 Token 增长 ==========
+    dragon.tokenTimer += dt;
+    if (dragon.tokenTimer >= 1.0) {
+        dragon.tokenTimer -= 1.0;
+        if (dragon.token < GPT_TOKEN_MAX && !dragon.ultReady && dragon.state !== 'flying') {
+            dragon.token += 1;
+            if (dragon.token >= GPT_TOKEN_MAX) {
+                dragon.ultReady = true;
+                addFloatText(dragon.x, dragon.y - dragon.r, '大招就绪！触碰边界释放', '#8000ff');
+            }
+        }
+    }
+
+    // ========== GPT娘 飞行状态更新 ==========
+    if (dragon.state === 'flying') {
+        dragon.stateTimer -= dt;
+        dragon.flightT = Math.min(1, dragon.flightT + dt / 2.0); 
+        
+        const t = dragon.flightT;
+        dragon.x = dragon.startX + t * (dragon.endX - dragon.startX);
+        dragon.y = dragon.startY + t * (dragon.endY - dragon.startY);
+        
+        if (dragon.stateTimer <= 0 || dragon.flightT >= 1) {
+            dragon.state = 'normal';
+            dragon.invincible = false;
+            dragon.r = DRAGON_BASE_R;
+            dragon.x = dragon.endX;
+            dragon.y = dragon.endY;
+            let angle = Math.random() * Math.PI * 2;
+            dragon.vx = Math.cos(angle) * DRAGON_INIT_SPEED;
+            dragon.vy = Math.sin(angle) * DRAGON_INIT_SPEED;
+            addFloatText(dragon.x, dragon.y - dragon.r, '降落！', '#8000ff');
+        }
+    }
+
+    // ========== 严格状态机 ==========
+    if (fish.state === 'charging') {
+        fish.vx = 0; fish.vy = 0;
+        fish.stateTimer -= dt;
+        if (fish.stateTimer <= 0) {
+            fish.state = 'dash';
+            fish.stateTimer = DASH_TIME;
+            fish.angle = Math.atan2(fish.targetY - fish.y, fish.targetX - fish.x);
+            fish.vx = Math.cos(fish.angle) * DASH_SPEED;
+            fish.vy = Math.sin(fish.angle) * DASH_SPEED;
+            fish.dashHitCount = 0; 
+            addFloatText(fish.x, fish.y - fish.r, `大运冲刺！(${DASH_TIME}s)`, '#ffcc00');
+        }
+    } else if (fish.state === 'dash') {
+        fish.stateTimer -= dt;
+        if (fish.stateTimer <= 0) {
+            fish.state = 'overload';
+            fish.stateTimer = OVERLOAD_TIME;
+            addFloatText(fish.x, fish.y - fish.r, `红温虚弱 (${OVERLOAD_TIME}s)`, '#ff4444');
+        }
+    } else if (fish.state === 'overload') {
+        fish.stateTimer -= dt;
+        if (fish.stateTimer <= 0) {
+            fish.state = 'normal';
+            fish.angle = Math.random() * Math.PI * 2;
+            addFloatText(fish.x, fish.y - fish.r, '恢复正常', '#4a9eff');
+        }
+    }
+
+    // ========== 速度控制 ==========
+    if (fish.state === 'dash') {
+        if (Math.hypot(fish.vx, fish.vy) > 10) {
+            fish.angle = Math.atan2(fish.vy, fish.vx);
+        }
+    } else if (fish.state === 'normal' || fish.state === 'overload') {
+        let fishTargetSpeed = FISH_INIT_SPEED;
+        if (fish.state === 'overload') fishTargetSpeed = OVERLOAD_SPEED;
+
+        let curSpeed = Math.hypot(fish.vx, fish.vy);
+        if (curSpeed > 5) fish.angle = Math.atan2(fish.vy, fish.vx);
+
+        let targetVx = Math.cos(fish.angle) * fishTargetSpeed;
+        let targetVy = Math.sin(fish.angle) * fishTargetSpeed;
+        let dvx = targetVx - fish.vx;
+        let dvy = targetVy - fish.vy;
+        let dvMag = Math.hypot(dvx, dvy);
+        if (dvMag > 0) {
+            let accelRate = (curSpeed < fishTargetSpeed) ? ACCEL : DECEL;
+            let maxDeltaV = accelRate * dt;
+            if (dvMag <= maxDeltaV) {
+                fish.vx = targetVx; fish.vy = targetVy;
+            } else {
+                fish.vx += (dvx / dvMag) * maxDeltaV;
+                fish.vy += (dvy / dvMag) * maxDeltaV;
+            }
+        }
+    }
+
+    if (dragon.state !== 'flying') {
+        let dragonTargetSpeed = DRAGON_INIT_SPEED;
+        let dCurSpeed = Math.hypot(dragon.vx, dragon.vy);
+        if (dCurSpeed > 5) dragon.angle = Math.atan2(dragon.vy, dragon.vx);
+        
+        let dTargetVx = Math.cos(dragon.angle) * dragonTargetSpeed;
+        let dTargetVy = Math.sin(dragon.angle) * dragonTargetSpeed;
+        let ddvx = dTargetVx - dragon.vx;
+        let ddvy = dTargetVy - dragon.vy;
+        let ddvMag = Math.hypot(ddvx, ddvy);
+        if (ddvMag > 0) {
+            let accelRate = (dCurSpeed < dragonTargetSpeed) ? ACCEL : DECEL;
+            let maxDeltaV = accelRate * dt;
+            if (ddvMag <= maxDeltaV) {
+                dragon.vx = dTargetVx; dragon.vy = dTargetVy;
+            } else {
+                dragon.vx += (ddvx / ddvMag) * maxDeltaV;
+                dragon.vy += (ddvy / ddvMag) * maxDeltaV;
+            }
+        }
+    }
+
+    // ========== 移动 ==========
+    fish.x += fish.vx * dt;
+    fish.y += fish.vy * dt;
+    
+    if (dragon.state !== 'flying') {
+        dragon.x += dragon.vx * dt;
+        dragon.y += dragon.vy * dt;
+    }
+
+    wallCollision(fish);
+    wallCollision(dragon); 
+    resolveCollision(fish, dragon);
+
+    // ========== 更新飞出物 ==========
+    for (let i = flyawayItems.length - 1; i >= 0; i--) {
+        const item = flyawayItems[i];
+        item.x += item.vx * dt;
+        item.y += item.vy * dt;
+        item.life -= dt * 2.5;
+        if (item.x < -100 || item.x > W + 100 || item.y < -100 || item.y > H + 100 || item.life <= 0) {
+            flyawayItems.splice(i, 1);
+        }
+    }
+
+    // ========== 特殊谜题寿命更新 ==========
+    for (let i = specialProblems.length - 1; i >= 0; i--) {
+        specialProblems[i].life -= dt;
+        if (specialProblems[i].life <= 0) {
+            specialProblems.splice(i, 1);
+        }
+    }
+
+    // ========== 生成米饭 ==========
+    riceSpawnTimer -= dt;
+    if (riceSpawnTimer <= 0 && rices.length < MAX_RICE) {
+        rices.push({
+            x: Math.random() * (W - 100) + 50,
+            y: Math.random() * (H - 100) + 50,
+            r: 18
+        });
+        riceSpawnTimer = RICE_SPAWN_TIME;
+    }
+
+    // ========== 生成普通数学题 ==========
+    mathSpawnTimer -= dt;
+    if (mathSpawnTimer <= 0 && mathProblems.length < MAX_MATH && dragon.state !== 'flying') {
+        spawnMathProblem(dragon.lastX, dragon.lastY);
+        mathSpawnTimer = MATH_SPAWN_TIME;
+    }
+
+    // ========== 吃米饭 ==========
+    for (let i = rices.length - 1; i >= 0; i--) {
+        const rice = rices[i];
+        const dx = fish.x - rice.x;
+        const dy = fish.y - rice.y;
+        if (Math.sqrt(dx * dx + dy * dy) < fish.r + rice.r) {
+            rices.splice(i, 1);
+            if (fish.state === 'dash') {
+                fish.hp = Math.min(fish.maxHp, fish.hp + DASH_HEAL);
+                addFloatText(fish.x, fish.y - fish.r, `+${DASH_HEAL} HP`, '#4aff4a');
+            } else if (fish.state === 'normal') {
+                fish.token = Math.min(fish.maxToken, fish.token + RICE_TOKEN_VALUE);
+                addFloatText(fish.x, fish.y - fish.r, `+${RICE_TOKEN_VALUE} Token`, '#4aff4a');
+                if (fish.token >= fish.maxToken) {
+                    fish.state = 'charging';
+                    fish.stateTimer = CHARGE_TIME;
+                    fish.token = 0;
+                    fish.vx = 0; fish.vy = 0;
+                    fish.targetX = dragon.x;
+                    fish.targetY = dragon.y;
+                    addFloatText(fish.x, fish.y - fish.r, '锁定目标！蓄力中...', '#ffaa00');
+                }
+            }
+        }
+    }
+
+    // ========== 特殊谜题碰撞检测 ==========
+    if (fish.specialCooldown <= 0) {
+        for (let i = specialProblems.length - 1; i >= 0; i--) {
+            const sp = specialProblems[i];
+            const dx = fish.x - sp.x;
+            const dy = fish.y - sp.y;
+            if (Math.sqrt(dx * dx + dy * dy) < fish.r + sp.r) {
+                fish.specialCooldown = SPECIAL_COOLDOWN;
+                
+                if (Math.random() < SPECIAL_ANSWER_CHANCE) {
+                    specialProblems.splice(i, 1);
+                    const lost = Math.floor(dragon.token * 0.25);
+                    dragon.token = Math.max(0, dragon.token - lost);
+                    addFloatText(fish.x, fish.y - fish.r, `解谜成功! GPT -${lost} Token`, '#cc44ff');
+                    
+                    if (specialProblems.length > 0) {
+                        let nearest = null;
+                        let nearestDist = Infinity;
+                        for (const other of specialProblems) {
+                            const d = Math.hypot(other.x - fish.x, other.y - fish.y);
+                            if (d < nearestDist) {
+                                nearestDist = d;
+                                nearest = other;
+                            }
+                        }
+                        if (nearest) {
+                            const idx = specialProblems.indexOf(nearest);
+                            if (idx !== -1) {
+                                specialProblems.splice(idx, 1);
+                                addFloatText(nearest.x, nearest.y, '连带消除!', '#cc44ff');
+                            }
+                        }
+                    }
+                } else {
+                    // ★ 答错：叠加侵蚀 + 扣血 + 扣1 Token
+                    fish.specialDebuffLayers++;
+                    fish.specialDebuffTimer = SPECIAL_DEBUFF_TIME;
+                    const dmg = SPECIAL_BASE_DMG + (fish.specialDebuffLayers - 1) * SPECIAL_LAYER_DMG;
+                    fish.hp = Math.max(0, fish.hp - dmg);
+                    // ★ 额外减少1点Token
+                    fish.token = Math.max(0, fish.token - SPECIAL_TOKEN_LOSS);
+                    addFloatText(fish.x, fish.y - fish.r, `侵蚀! -${dmg} HP -${SPECIAL_TOKEN_LOSS} Token (${fish.specialDebuffLayers}层)`, '#cc44ff');
+                    if (fish.hp <= 0) gameOver = true;
+
+                    specialFailCount++;
+                    if (specialFailCount >= SPECIAL_FAIL_DIFFUSE) {
+                        specialFailCount = 0;
+                        const baseX = sp.x;
+                        const baseY = sp.y;
+                        const toSpawn = Math.min(4, SPECIAL_PROBLEM_MAX - specialProblems.length);
+                        for (let k = 0; k < toSpawn; k++) {
+                            const a = Math.random() * Math.PI * 2;
+                            const d = 80 + Math.random() * 120;
+                            let nx = baseX + Math.cos(a) * d;
+                            let ny = baseY + Math.sin(a) * d;
+                            spawnSpecialProblem(nx, ny);
+                        }
+                        addFloatText(baseX, baseY, '谜题扩散！', '#cc44ff');
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    // ========== DeepSeek 普通谜题 ==========
+    for (let i = mathProblems.length - 1; i >= 0; i--) {
+        const mp = mathProblems[i];
+        const dx = fish.x - mp.x;
+        const dy = fish.y - mp.y;
+        if (Math.sqrt(dx * dx + dy * dy) < fish.r + mp.r) {
+            mathProblems.splice(i, 1);
+            
+            if (fish.state === 'dash') {
+                const angle = Math.atan2(mp.y - fish.y, mp.x - fish.x);
+                flyawayItems.push({
+                    x: mp.x, y: mp.y, 
+                    vx: Math.cos(angle) * 1500, 
+                    vy: Math.sin(angle) * 1500, 
+                    r: mp.r,
+                    life: 1.0
+                });
+                addFloatText(mp.x, mp.y, '撞飞！', '#ffcc00');
+                continue; 
+            }
+
+            if (fish.token < ANSWER_COST) {
+                fish.hp = Math.max(0, fish.hp - 88);
+                addFloatText(fish.x, fish.y - fish.r, `Token不足! -88 HP`, '#ff0000');
+                if (fish.hp <= 0) gameOver = true;
+            } else {
+                fish.token -= ANSWER_COST;
+                if (Math.random() < 0.5) {
+                    addFloatText(fish.x, fish.y - fish.r, `答对! -${ANSWER_COST} Token`, '#4aff4a');
+                } else {
+                    fish.hp = Math.max(0, fish.hp - MATH_DAMAGE);
+                    addFloatText(fish.x, fish.y - fish.r, `答错! -${ANSWER_COST} Token -${MATH_DAMAGE} HP`, '#ff4444');
+                    if (fish.hp <= 0) gameOver = true;
+                }
+            }
+        }
+    }
+
+    // ========== GPT娘 普通答题 ==========
+    // ★ 修复：只有在【冷却结束】且【实际碰到题】时才进入答题流程
+    // 冷却期间完全跳过检测，避免视觉上误以为CD反复触发
+    if (dragon.answerCooldown <= 0 && dragon.state !== 'flying') {
+        for (let i = mathProblems.length - 1; i >= 0; i--) {
+            const mp = mathProblems[i];
+            const dx = dragon.x - mp.x;
+            const dy = dragon.y - mp.y;
+            if (Math.sqrt(dx * dx + dy * dy) < dragon.r + mp.r) {
+                mathProblems.splice(i, 1);
+                
+                // ★ CD只在真正答题后才启动
+                dragon.answerCooldown = GPT_ANSWER_CD;
+                
+                if (Math.random() < 0.5) {
+                    dragon.hp = Math.min(dragon.maxHp, dragon.hp + GPT_ANSWER_HEAL);
+                    addFloatText(dragon.x, dragon.y - dragon.r, `答对! +${GPT_ANSWER_HEAL} HP`, '#4aff4a');
+                } else {
+                    addFloatText(dragon.x, dragon.y - dragon.r, `答错... 无惩罚`, '#999');
+                }
+                break;
+            }
+        }
+    }
+
+    // ========== 飘字 ==========
+    for (let i = floatTexts.length - 1; i >= 0; i--) {
+        floatTexts[i].y -= 40 * dt;
+        floatTexts[i].life -= dt * 1.5;
+        if (floatTexts[i].life <= 0) floatTexts.splice(i, 1);
+    }
+}
+
+// ==================== UI 更新 ====================
+function updateUI() {
+    document.getElementById('ui-fish-hp').textContent = `${fish.hp}/${fish.maxHp}`;
+    document.getElementById('ui-fish-token').textContent = `${fish.token}/${fish.maxToken}`;
+    let fState = '普通';
+    if (fish.state === 'charging') fState = `蓄力锁定 (${fish.stateTimer.toFixed(1)}s)`;
+    else if (fish.state === 'dash') fState = `大运冲刺 (${fish.stateTimer.toFixed(1)}s)`;
+    else if (fish.state === 'overload') fState = `红温虚弱 (${fish.stateTimer.toFixed(1)}s)`;
+    document.getElementById('ui-fish-state').textContent = fState;
+    
+    const debuffDiv = document.getElementById('ui-fish-debuff');
+    if (fish.specialDebuffLayers > 0) {
+        debuffDiv.style.display = 'block';
+        document.getElementById('ui-fish-debuff-val').textContent = `${fish.specialDebuffLayers}层 (${fish.specialDebuffTimer.toFixed(1)}s)`;
+    } else {
+        debuffDiv.style.display = 'none';
+    }
+
+    document.getElementById('ui-dragon-hp').textContent = `${dragon.hp}/${dragon.maxHp}`;
+    document.getElementById('ui-dragon-token').textContent = `${dragon.token}/${GPT_TOKEN_MAX}`;
+    let dState = '普通';
+    if (dragon.state === 'flying') dState = '末影龙形态！';
+    else if (dragon.ultReady) dState = '大招就绪！';
+    else if (dragon.answerCooldown > 0) dState = `答题CD (${dragon.answerCooldown.toFixed(1)}s)`;
+    else dState = '答题就绪';
+    document.getElementById('ui-dragon-state').textContent = dState;
+
+    const healSpan = document.getElementById('ui-dragon-heal');
+    if (specialProblems.length > 0) {
+        if (dragon.specialHealCD > 0) {
+            healSpan.textContent = `冷却 ${dragon.specialHealCD.toFixed(1)}s`;
+            healSpan.className = 'warn';
+        } else {
+            healSpan.textContent = `就绪 (+${specialProblems.length * SPECIAL_HEAL_PER_PROBLEM})`;
+            healSpan.className = 'heal';
+        }
+    } else {
+        healSpan.textContent = '无谜题';
+        healSpan.className = 'highlight';
+    }
+
+    document.getElementById('ui-special-count').textContent = `${specialProblems.length}/${SPECIAL_PROBLEM_MAX}`;
+    document.getElementById('ui-fail-count').textContent = `${specialFailCount}/${SPECIAL_FAIL_DIFFUSE}`;
+}
+
+// ==================== 绘制 ====================
+function drawFish() {
+    ctx.save();
+    
+    let shakeX = 0, shakeY = 0;
+    if (fish.state === 'charging') {
+        shakeX = (Math.random() - 0.5) * 15;
+        shakeY = (Math.random() - 0.5) * 15;
+    }
+    
+    if (fish.specialDebuffLayers > 0) {
+        ctx.beginPath();
+        ctx.arc(fish.x, fish.y, fish.r + 15, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(204, 68, 255, ${0.5 + fish.specialDebuffLayers * 0.1})`;
+        ctx.lineWidth = 4;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(fish.x, fish.y, fish.r + 25, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(204, 68, 255, 0.2)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    }
+    
+    ctx.translate(fish.x + shakeX, fish.y + shakeY);
+    ctx.beginPath(); ctx.arc(0, 0, fish.r, 0, Math.PI * 2); ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fill();
+
+    if (fishImg.complete && fishImg.naturalWidth !== 0) {
+        ctx.save(); ctx.beginPath(); ctx.arc(0, 0, fish.r, 0, Math.PI * 2); ctx.clip();
+        ctx.drawImage(fishImg, -fish.r, -fish.r, fish.r * 2, fish.r * 2); ctx.restore();
+    } else {
+        ctx.beginPath(); ctx.arc(0, 0, fish.r, 0, Math.PI * 2);
+        if (fish.state === 'charging') ctx.fillStyle = '#ff8800';
+        else if (fish.state === 'dash') ctx.fillStyle = '#ffcc00';
+        else if (fish.state === 'overload') ctx.fillStyle = '#ff2222';
+        else ctx.fillStyle = '#4a9eff';
+        ctx.fill();
+        ctx.beginPath(); ctx.arc(-fish.r * 0.3, -fish.r * 0.2, fish.r * 0.15, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill();
+        ctx.beginPath(); ctx.arc(-fish.r * 0.3, -fish.r * 0.2, fish.r * 0.08, 0, Math.PI * 2); ctx.fillStyle = '#000'; ctx.fill();
+    }
+
+    if (fish.state === 'charging') {
+        ctx.beginPath(); ctx.arc(0, 0, fish.r + 10, 0, Math.PI * 2); ctx.strokeStyle = '#ff8800'; ctx.lineWidth = 6; ctx.stroke();
+    } else if (fish.state === 'dash') {
+        ctx.beginPath(); ctx.arc(0, 0, fish.r + 10, 0, Math.PI * 2); ctx.strokeStyle = '#ffcc00'; ctx.lineWidth = 8; ctx.stroke();
+        ctx.beginPath(); ctx.arc(-Math.cos(fish.angle)*30, -Math.sin(fish.angle)*30, fish.r + 5, 0, Math.PI * 2); ctx.strokeStyle = 'rgba(255, 204, 0, 0.4)'; ctx.lineWidth = 4; ctx.stroke();
+    } else if (fish.state === 'overload') {
+        ctx.beginPath(); ctx.arc(0, 0, fish.r + 10, 0, Math.PI * 2); ctx.strokeStyle = '#ff2222'; ctx.lineWidth = 6; ctx.stroke();
+        ctx.beginPath(); ctx.arc(0, 0, fish.r + 20, 0, Math.PI * 2); ctx.strokeStyle = 'rgba(255, 34, 34, 0.3)'; ctx.lineWidth = 4; ctx.stroke();
+    }
+    ctx.restore();
+
+    if (fish.state === 'charging') {
+        ctx.beginPath();
+        ctx.setLineDash([10, 10]);
+        ctx.moveTo(fish.x, fish.y);
+        ctx.lineTo(fish.targetX, fish.targetY);
+        ctx.strokeStyle = 'rgba(255, 136, 0, 0.5)';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.setLineDash([]);
+        
+        ctx.beginPath();
+        ctx.arc(fish.targetX, fish.targetY, 15, 0, Math.PI * 2);
+        ctx.strokeStyle = '#ff8800';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+    }
+}
+
+function drawDragon() {
+    ctx.save();
+    
+    if (dragon.state === 'flying') {
+        for (let i = 1; i <= 5; i++) {
+            const traceT = Math.max(0, dragon.flightT - i * 0.05);
+            const tx = dragon.startX + traceT * (dragon.endX - dragon.startX);
+            const ty = dragon.startY + traceT * (dragon.endY - dragon.startY);
+            ctx.beginPath();
+            ctx.arc(tx, ty, dragon.r * (1 - i * 0.15), 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(128, 0, 255, ${0.3 - i * 0.05})`;
+            ctx.fill();
+        }
+        
+        ctx.beginPath();
+        ctx.arc(dragon.x, dragon.y, dragon.r + 15, 0, Math.PI * 2);
+        ctx.strokeStyle = '#8000ff';
+        ctx.lineWidth = 4;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(dragon.x, dragon.y, dragon.r + 25, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(128, 0, 255, 0.3)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    }
+    
+    ctx.translate(dragon.x, dragon.y);
+    ctx.beginPath(); ctx.arc(0, 0, dragon.r, 0, Math.PI * 2); ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fill();
+
+    if (dragonImg.complete && dragonImg.naturalWidth !== 0) {
+        ctx.save(); ctx.beginPath(); ctx.arc(0, 0, dragon.r, 0, Math.PI * 2); ctx.clip();
+        ctx.drawImage(dragonImg, -dragon.r, -dragon.r, dragon.r * 2, dragon.r * 2); ctx.restore();
+    } else {
+        ctx.beginPath(); ctx.arc(0, 0, dragon.r, 0, Math.PI * 2); ctx.fillStyle = '#ffffff'; ctx.fill();
+        ctx.strokeStyle = dragon.state === 'flying' ? '#8000ff' : '#ccc'; 
+        ctx.lineWidth = 4; ctx.stroke();
+        ctx.beginPath(); ctx.arc(dragon.r * 0.3, -dragon.r * 0.2, dragon.r * 0.15, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill();
+        ctx.beginPath(); ctx.arc(dragon.r * 0.3, -dragon.r * 0.2, dragon.r * 0.08, 0, Math.PI * 2); 
+        ctx.fillStyle = '#8000ff'; ctx.fill();
+    }
+    
+    if (dragon.ultReady && dragon.state !== 'flying') {
+        ctx.beginPath();
+        ctx.arc(0, 0, dragon.r + 12, 0, Math.PI * 2);
+        ctx.strokeStyle = '#8000ff';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([5, 5]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+    
+    ctx.restore();
+}
+
+function draw() {
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#0a1a2a'; ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = '#4a9eff'; ctx.lineWidth = 4; ctx.strokeRect(0, 0, W, H);
+
+    rices.forEach(r => {
+        ctx.beginPath(); ctx.arc(r.x, r.y, r.r, 0, Math.PI * 2); ctx.fillStyle = '#fff8e7'; ctx.fill();
+        ctx.strokeStyle = '#ddd'; ctx.lineWidth = 2; ctx.stroke();
+        ctx.fillStyle = '#333'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('饭', r.x, r.y);
+    });
+
+    mathProblems.forEach(mp => {
+        ctx.beginPath(); ctx.arc(mp.x, mp.y, mp.r, 0, Math.PI * 2); ctx.fillStyle = '#ffd700'; ctx.fill();
+        ctx.strokeStyle = '#b8860b'; ctx.lineWidth = 2; ctx.stroke();
+        ctx.fillStyle = '#333'; ctx.font = 'bold 18px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('?', mp.x, mp.y);
+    });
+
+    specialProblems.forEach(sp => {
+        const glowSize = sp.r + 6 + Math.sin(Date.now() / 200) * 3;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, glowSize, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(204, 68, 255, 0.25)';
+        ctx.fill();
+        ctx.beginPath(); ctx.arc(sp.x, sp.y, sp.r, 0, Math.PI * 2);
+        ctx.fillStyle = '#cc44ff'; ctx.fill();
+        ctx.strokeStyle = '#8800cc'; ctx.lineWidth = 3; ctx.stroke();
+        ctx.fillStyle = '#fff'; ctx.font = 'bold 22px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('!', sp.x, sp.y);
+        ctx.fillStyle = '#fff'; ctx.font = 'bold 12px sans-serif';
+        ctx.fillText(Math.ceil(sp.life), sp.x, sp.y + sp.r + 12);
+    });
+
+    flyawayItems.forEach(item => {
+        ctx.globalAlpha = item.life;
+        ctx.beginPath(); ctx.arc(item.x, item.y, item.r, 0, Math.PI * 2); 
+        ctx.fillStyle = '#ffcc00'; ctx.fill();
+        ctx.strokeStyle = '#ff8800'; ctx.lineWidth = 3; ctx.stroke();
+        ctx.fillStyle = '#333'; ctx.font = 'bold 18px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('?', item.x, item.y);
+        ctx.globalAlpha = 1.0;
+    });
+
+    drawFish();
+    drawDragon();
+
+    floatTexts.forEach(ft => {
+        ctx.fillStyle = ft.color; ctx.globalAlpha = Math.max(0, ft.life);
+        ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText(ft.text, ft.x, ft.y); ctx.globalAlpha = 1.0;
+    });
+
+    if (gameOver) {
+        ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = '#fff'; ctx.font = 'bold 50px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText('游戏结束', W / 2, H / 2);
+    }
+}
+
+// ==================== 主循环 ====================
+let lastTime = 0;
+function gameLoop(timestamp) {
+    const dt = Math.min((timestamp - lastTime) / 1000, 0.05);
+    lastTime = timestamp;
+    if (dt > 0) update(dt);
+    updateUI();
+    draw();
+    requestAnimationFrame(gameLoop);
+}
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
